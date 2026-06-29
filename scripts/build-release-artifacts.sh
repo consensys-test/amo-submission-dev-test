@@ -25,10 +25,5 @@ chmod +x "${DIST}/source/build.sh"
   zip -qr "${DIST}/${SOURCE}" .
 )
 
-(
-  cd "${DIST}"
-  shasum -a 256 "${XPI}" "${SOURCE}" | awk '{print $1 " *" $2}' > SHA256SUMS
-)
-
 printf 'version=%s\n' "${VERSION}"
 printf 'dist=%s\n' "${DIST}"
