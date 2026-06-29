@@ -1,0 +1,22 @@
+{
+  "manifest_version": 2,
+  "name": "AMO Dev Upload Test",
+  "version": "1.0.5",
+  "description": "Minimal dev fixture for AMO upload testing.",
+  "browser_action": {
+    "default_title": "AMO upload test"
+  },
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bobby.grigorov@consensys.net",
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  }
+}
