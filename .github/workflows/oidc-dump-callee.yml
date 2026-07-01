@@ -1,0 +1,37 @@
+name: OIDC dump — callee (reusable)
+
+# Mimics upload-extension-to-cws.yml / upload-extension-to-amo.yml as a reusable workflow.
+# Dumps OIDC JWT claims from inside the CALLEE job.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  dump-callee-claims:
+    name: Callee OIDC claims
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Print callee context
+        run: |
+          {
+            echo "role=CALLEE"
+            echo "github.workflow=${{ github.workflow }}"
+            echo "github.ref=${{ github.ref }}"
+            echo "github.event_name=${{ github.event_name }}"
+            echo "github.actor=${{ github.actor }}"
+          } | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: Decode OIDC claims (callee)
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
+        run: bash .github/scripts/decode-oidc-claims.sh CALLEE sts.amazonaws.com

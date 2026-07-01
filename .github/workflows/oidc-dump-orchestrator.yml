@@ -1,0 +1,53 @@
+name: OIDC dump — orchestrator (caller)
+
+# Mimics runway-extension-release-and-submit.yml calling store upload workflows via workflow_call.
+# Job 1 dumps CALLER claims; Job 2 calls the reusable callee which dumps CALLEE claims.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run mode — caller-only skips workflow_call'
+        required: false
+        type: choice
+        default: caller-and-callee
+        options:
+          - caller-and-callee
+          - caller-only
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  dump-caller-claims:
+    name: Caller OIDC claims (orchestrator job)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Print caller context
+        run: |
+          {
+            echo "role=CALLER"
+            echo "github.workflow=${{ github.workflow }}"
+            echo "github.ref=${{ github.ref }}"
+            echo "github.event_name=${{ github.event_name }}"
+            echo "github.actor=${{ github.actor }}"
+          } | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: Decode OIDC claims (caller)
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
+        run: bash .github/scripts/decode-oidc-claims.sh CALLER sts.amazonaws.com
+
+  invoke-callee:
+    name: Invoke callee via workflow_call
+    needs:
+      - dump-caller-claims
+    if: inputs.mode != 'caller-only'
+    uses: ./.github/workflows/oidc-dump-callee.yml
+    secrets: inherit
