@@ -1,0 +1,95 @@
+# Fixture twin of MetaMask/metamask-extension publish-release-from-release-head.yml
+# (INFRA-3786). Same relative workflow path + release/* ref so the UAT
+# amo-submission Lambda signer pin matches without Terraform overrides.
+name: Publish fixture release with attestation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Require release branch
+        run: |
+          set -euo pipefail
+          ref="${GITHUB_REF}"
+          if [[ "${ref}" != refs/heads/release/* ]]; then
+            echo "::error::Dispatch from a release/* branch (got ${ref}). The UAT Lambda pins ATTESTATION_SIGNER_REF_PATTERN=refs/heads/release/.+"
+            exit 1
+          fi
+
+      - name: Build fixture zip
+        id: build
+        run: |
+          set -euo pipefail
+          eval "$(./scripts/build-release-artifacts.sh)"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "zip_path=${xpi}" >> "${GITHUB_OUTPUT}"
+          echo "zip_name=$(basename "${xpi}")" >> "${GITHUB_OUTPUT}"
+          ls -lh "${xpi}"
+
+      - name: Attest fixture zip
+        id: attest
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
+        with:
+          subject-path: ${{ steps.build.outputs.zip_path }}
+
+      - name: Collect attestation bundle
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          ZIP_NAME: ${{ steps.build.outputs.zip_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${BUNDLE_PATH}" || ! -f "${BUNDLE_PATH}" ]]; then
+            echo "::error::Attestation bundle missing"
+            exit 1
+          fi
+          dest="${GITHUB_WORKSPACE}/${ZIP_NAME}.sigstore.json"
+          cp "${BUNDLE_PATH}" "${dest}"
+          echo "Collected $(basename "${dest}")"
+
+      - name: Generate SHA256SUMS
+        env:
+          ZIP_PATH: ${{ steps.build.outputs.zip_path }}
+        run: |
+          set -euo pipefail
+          (
+            cd "$(dirname "${ZIP_PATH}")"
+            sha256sum --text "$(basename "${ZIP_PATH}")"
+          ) > "${GITHUB_WORKSPACE}/SHA256SUMS"
+          cat "${GITHUB_WORKSPACE}/SHA256SUMS"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.build.outputs.version }}
+          ZIP_PATH: ${{ steps.build.outputs.zip_path }}
+          ZIP_NAME: ${{ steps.build.outputs.zip_name }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::error::Release ${tag} already exists"
+            exit 1
+          fi
+          gh release create "${tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${tag}" \
+            --notes "INFRA-3786 fixture: attested zip + .sigstore.json for UAT amo-submission." \
+            --target "${GITHUB_SHA}" \
+            "${ZIP_PATH}" \
+            "${GITHUB_WORKSPACE}/${ZIP_NAME}.sigstore.json" \
+            "${GITHUB_WORKSPACE}/SHA256SUMS"
+          echo "### Fixture release ${tag}" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- asset: \`${ZIP_NAME}\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- bundle: \`${ZIP_NAME}.sigstore.json\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- sums: \`SHA256SUMS\`" >> "${GITHUB_STEP_SUMMARY}"

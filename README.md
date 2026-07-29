@@ -29,3 +29,39 @@ Direct callee-only run: **OIDC dump — callee (reusable)** → Run workflow.
 | `job_workflow_ref` | **Verify** — should be callee upload workflow path |
 
 Results inform CWS WIF CEL (`workflow_ref`) vs AMO IAM (`job_workflow_ref`) updates.
+
+## Attested fixture release (INFRA-3786)
+
+Publishes a minimal Firefox zip with a Sigstore build-provenance bundle so UAT
+`amo-submission` can exercise `ATTESTATION_REQUIRED=true` without a MetaMask
+extension release cut.
+
+The workflow path is intentionally
+`.github/workflows/publish-release-from-release-head.yml` and must run from a
+`release/*` branch — matching the Lambda defaults for
+`ATTESTATION_SIGNER_WORKFLOW` and `ATTESTATION_SIGNER_REF_PATTERN`.
+
+### Publish
+
+```bash
+# After the workflow is on main:
+git checkout -b release/1.0.8 origin/main
+git push -u origin HEAD
+gh workflow run publish-release-from-release-head.yml --ref release/1.0.8
+```
+
+### Verify (CWS-style)
+
+```bash
+gh release download v1.0.8 --repo consensys-test/amo-submission-dev-test
+gh attestation verify metamask-firefox-1.0.8.zip \
+  --repo consensys-test/amo-submission-dev-test \
+  --signer-workflow consensys-test/amo-submission-dev-test/.github/workflows/publish-release-from-release-head.yml
+```
+
+### Verify (AMO-style)
+
+Confirm `metamask-firefox-1.0.8.zip.sigstore.json` is on the release, then invoke
+UAT `amo-submission:dev` with `version=1.0.8` (after the hardened Lambda from
+INFRA-3786 is deployed).
+
