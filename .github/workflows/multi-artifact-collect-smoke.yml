@@ -1,0 +1,141 @@
+# Smoke for the MetaMask #44955 multi-artifact collect path (INFRA-3786).
+# Proves: 2x attest-build-provenance → collect_bundle (glob == 1) →
+# sibling {zip}.sigstore.json → gh release create with both bundles.
+#
+# Separate from publish-release-from-release-head.yml so the UAT Lambda signer
+# pin (single-artifact twin) stays unchanged.
+name: Multi-artifact collect smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  collect-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Build two fixture zips (firefox + flask layout)
+        id: build
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/build-multi-artifact-collect-smoke.sh
+          eval "$(./scripts/build-multi-artifact-collect-smoke.sh)"
+          echo "smoke_version=${smoke_version}" >> "${GITHUB_OUTPUT}"
+          echo "firefox_zip=${firefox_zip}" >> "${GITHUB_OUTPUT}"
+          echo "flask_zip=${flask_zip}" >> "${GITHUB_OUTPUT}"
+          ls -lh "${firefox_zip}" "${flask_zip}"
+
+      - name: Attest firefox artifact
+        id: attest-firefox
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
+        with:
+          subject-path: build-dist-mv2-webpack/builds/metamask-firefox-*.zip
+
+      - name: Attest flask firefox artifact
+        id: attest-flask-firefox
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
+        with:
+          subject-path: build-flask-mv2-webpack/builds/metamask-firefox-*.zip
+
+      # Same collect_bundle helper shape as MetaMask publish-release-from-release-head.yml
+      - name: Collect attestation bundles
+        env:
+          FIREFOX_BUNDLE: ${{ steps.attest-firefox.outputs.bundle-path }}
+          FLASK_FIREFOX_BUNDLE: ${{ steps.attest-flask-firefox.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+
+          collect_bundle() {
+            local bundle_path="${1}"
+            local zip_glob="${2}"
+
+            if [[ -z "${bundle_path}" || ! -f "${bundle_path}" ]]; then
+              echo "::error::Attestation bundle missing for ${zip_glob}"
+              exit 1
+            fi
+
+            local zips=()
+            while IFS= read -r zip; do
+              zips+=("${zip}")
+            done < <(compgen -G "${zip_glob}" || true)
+
+            if [[ "${#zips[@]}" -ne 1 ]]; then
+              echo "::error::Expected exactly 1 artifact for ${zip_glob}, found ${#zips[@]}"
+              exit 1
+            fi
+
+            local dest
+            dest="${GITHUB_WORKSPACE}/$(basename "${zips[0]}").sigstore.json"
+            cp "${bundle_path}" "${dest}"
+            echo "Collected $(basename "${dest}")"
+          }
+
+          collect_bundle "${FIREFOX_BUNDLE}" 'build-dist-mv2-webpack/builds/metamask-firefox-*.zip'
+          collect_bundle "${FLASK_FIREFOX_BUNDLE}" 'build-flask-mv2-webpack/builds/metamask-firefox-*.zip'
+
+      - name: Generate SHA256SUMS + assert siblings
+        env:
+          FIREFOX_ZIP: ${{ steps.build.outputs.firefox_zip }}
+          FLASK_ZIP: ${{ steps.build.outputs.flask_zip }}
+        run: |
+          set -euo pipefail
+          SHA256SUMS="${GITHUB_WORKSPACE}/SHA256SUMS"
+          : > "${SHA256SUMS}"
+
+          webpack_artifacts=("${FIREFOX_ZIP}" "${FLASK_ZIP}")
+          attestation_bundles=()
+          for artifact in "${webpack_artifacts[@]}"; do
+            ( cd "$(dirname "${artifact}")" && sha256sum --text "$(basename "${artifact}")" ) >> "${SHA256SUMS}"
+            bundle="$(basename "${artifact}").sigstore.json"
+            if [[ ! -f "${GITHUB_WORKSPACE}/${bundle}" ]]; then
+              echo "::error::Attestation bundle not found: ${bundle}"
+              exit 1
+            fi
+            attestation_bundles+=("${GITHUB_WORKSPACE}/${bundle}")
+          done
+
+          echo "=== SHA256SUMS ==="
+          cat "${SHA256SUMS}"
+          ls -lh "${attestation_bundles[@]}"
+
+      - name: Create smoke GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SMOKE_VERSION: ${{ steps.build.outputs.smoke_version }}
+          FIREFOX_ZIP: ${{ steps.build.outputs.firefox_zip }}
+          FLASK_ZIP: ${{ steps.build.outputs.flask_zip }}
+        run: |
+          set -euo pipefail
+          tag="v-${SMOKE_VERSION}"
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::error::Release ${tag} already exists — delete it or bump SMOKE_VERSION"
+            exit 1
+          fi
+
+          firefox_bundle="${GITHUB_WORKSPACE}/$(basename "${FIREFOX_ZIP}").sigstore.json"
+          flask_bundle="${GITHUB_WORKSPACE}/$(basename "${FLASK_ZIP}").sigstore.json"
+
+          gh release create "${tag}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${tag}" \
+            --notes "INFRA-3786 multi-artifact collect smoke (2 zips + 2 .sigstore.json). Not for AMO Lambda E2E." \
+            --target "${GITHUB_SHA}" \
+            "${FIREFOX_ZIP}" \
+            "${FLASK_ZIP}" \
+            "${firefox_bundle}" \
+            "${flask_bundle}" \
+            "${GITHUB_WORKSPACE}/SHA256SUMS"
+
+          {
+            echo "### Multi-artifact collect smoke ${tag}"
+            echo "- assets: \`$(basename "${FIREFOX_ZIP}")\`, \`$(basename "${FLASK_ZIP}")\`"
+            echo "- bundles: \`$(basename "${firefox_bundle}")\`, \`$(basename "${flask_bundle}")\`"
+            echo "- sums: \`SHA256SUMS\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
