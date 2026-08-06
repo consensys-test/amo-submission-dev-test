@@ -29,6 +29,10 @@ jobs:
 
       - name: Build fixture zip
         id: build
+        env:
+          # ~20 MiB urandom pad for INFRA-3675 UAT timing (download + AMO poll).
+          # Not MetaMask IP; personal gecko ID only (bobby.grigorov@consensys.net).
+          FIXTURE_PAD_MIB: "20"
         run: |
           set -euo pipefail
           eval "$(./scripts/build-release-artifacts.sh)"
@@ -36,6 +40,13 @@ jobs:
           echo "zip_path=${xpi}" >> "${GITHUB_OUTPUT}"
           echo "zip_name=$(basename "${xpi}")" >> "${GITHUB_OUTPUT}"
           ls -lh "${xpi}"
+          # Fail closed if padding did not produce a multi-MiB artifact.
+          size_bytes="$(stat -c%s "${xpi}")"
+          min_bytes=$((15 * 1024 * 1024))
+          if (( size_bytes < min_bytes )); then
+            echo "::error::Expected >=15 MiB fixture (got ${size_bytes} bytes). Check FIXTURE_PAD_MIB."
+            exit 1
+          fi
 
       - name: Attest fixture zip
         id: attest
@@ -84,7 +95,7 @@ jobs:
           gh release create "${tag}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${tag}" \
-            --notes "INFRA-3786 fixture: attested zip + .sigstore.json for UAT amo-submission." \
+            --notes "INFRA-3675/3786 fixture: ~20 MiB attested zip for UAT amo-submission size/timing. Personal gecko listing only — not MetaMask production." \
             --target "${GITHUB_SHA}" \
             "${ZIP_PATH}" \
             "${GITHUB_WORKSPACE}/${ZIP_NAME}.sigstore.json" \
