@@ -86,3 +86,27 @@ Confirm `metamask-firefox-1.0.8.zip.sigstore.json` is on the release, then invok
 UAT `amo-submission:dev` with `version=1.0.8` (after the hardened Lambda from
 INFRA-3786 is deployed).
 
+## AMO reviewer artifacts (UAT, INFRA-3735)
+
+Publish also packages + uploads reviewer source/notes to the UAT bucket via a
+**hand-rolled** OIDC role (`amo-reviewer-publisher-fixture`) — not the
+Terraform `amo-reviewer-publisher` role. No GitHub secrets.
+
+| | |
+| --- | --- |
+| Action | `.github/actions/publish-amo-reviewer-artifacts/` |
+| Script | `.github/scripts/publish-firefox-reviewer-artifacts.sh` |
+| IAM notes | [docs/fixture-reviewer-publisher-iam.md](docs/fixture-reviewer-publisher-iam.md) |
+| Keys | `reviewer-source/{version}/metamask-firefox-{version}[-flask.0]-{source.zip\|amo-approval-notes.txt}` |
+
+**Included (mirrors MetaMask layout / firefox-bundle-script notes):** source zip with
+`metamask-extension-{version}/` + stub `bundle.sh`, reviewer instructions text,
+flask + main variants, S3 upload via OIDC.
+
+**Skipped (would need secrets or MetaMask prod assets):** private
+`firefox-bundle-script` clone, `compare_builds.sh`, real per-version `bundle.sh`
+fetch, MetaMask release notes API scrape.
+
+Lambda download on `:dev` still needs `AMO_REVIEWER_REQUIRED=true` (submission PR #27
++ alias config) after objects land in S3.
+

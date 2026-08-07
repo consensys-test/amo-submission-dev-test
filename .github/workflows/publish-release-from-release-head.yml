@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
 
       - name: Require release branch
         id: branch
@@ -119,3 +121,11 @@ jobs:
           echo "- asset: \`${ZIP_NAME}\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "- bundle: \`${ZIP_NAME}.sigstore.json\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "- sums: \`SHA256SUMS\`" >> "${GITHUB_STEP_SUMMARY}"
+
+      # UAT reviewer S3 (INFRA-3735): fixture twin of MetaMask publish-amo-reviewer-artifacts.
+      # Uses hand-rolled role amo-reviewer-publisher-fixture (not Terraform). No secrets.
+      # Runs even when release create was skipped (same SHA) so re-dispatch can re-upload.
+      - name: Publish AMO reviewer artifacts (UAT)
+        env:
+          RELEASE_TAG: v${{ steps.build.outputs.version }}
+        uses: ./.github/actions/publish-amo-reviewer-artifacts
