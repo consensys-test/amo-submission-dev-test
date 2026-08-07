@@ -30,6 +30,27 @@ Direct callee-only run: **OIDC dump — callee (reusable)** → Run workflow.
 
 Results inform CWS WIF CEL (`workflow_ref`) vs AMO IAM (`job_workflow_ref`) updates.
 
+## L1 fixture orchestrator (INFRA-3735 harness)
+
+Mirrors MetaMask `runway-extension-release-and-submit.yml` without CWS/AMO:
+
+| Workflow | Role |
+| --- | --- |
+| `runway-extension-release-and-submit.yml` | Phase 0 validate → Phase 1 publish → Phase 2 verify |
+| `publish-release-from-release-head.yml` | Attest + `.sigstore.json` + SHA256SUMS + GitHub Release (`workflow_call`) |
+| `verify-release-attestations.yml` | Download release, `sha256sum -c`, require Sigstore asset, `gh attestation verify` |
+
+Calling jobs grant the attestation permission ceiling (`write` for publish, `read` for verify). No AWS/GCP. Mutations are tags/releases in this repo only.
+
+### Run
+
+```bash
+git checkout -b release/1.0.11 origin/main   # manifest version must match
+git push -u origin HEAD
+gh workflow run runway-extension-release-and-submit.yml --ref release/1.0.11
+# Re-dispatch: Phase 1 auto-skips when release exists at the same SHA
+```
+
 ## Attested fixture release (INFRA-3786)
 
 Publishes a minimal Firefox zip with a Sigstore build-provenance bundle so UAT

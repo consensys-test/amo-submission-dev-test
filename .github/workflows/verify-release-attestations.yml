@@ -1,0 +1,85 @@
+# L1 verify-only callee — mirrors CWS attestation verify without store upload.
+# Called by runway-extension-release-and-submit.yml (fixture orchestrator).
+name: Verify fixture release attestations
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 1.0.11) — must match tag v{version}'
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+        description: 'Release version — must match tag v{version}'
+
+permissions:
+  contents: read
+  attestations: read # Required for gh attestation verify
+
+jobs:
+  verify:
+    name: Verify attestations (${{ inputs.version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ inputs.version }}
+      RELEASE_TAG: v${{ inputs.version }}
+      ZIP_NAME: metamask-firefox-${{ inputs.version }}.zip
+      SIGNER_WORKFLOW: ${{ github.repository }}/.github/workflows/publish-release-from-release-head.yml
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "${ZIP_NAME}" \
+            --pattern "${ZIP_NAME}.sigstore.json" \
+            --pattern SHA256SUMS \
+            --clobber
+          ls -lh
+
+      - name: Verify SHA256SUMS
+        run: |
+          set -euo pipefail
+          sha256sum -c SHA256SUMS
+          echo "SHA256SUMS OK for ${ZIP_NAME}"
+
+      - name: Require Sigstore bundle asset
+        run: |
+          set -euo pipefail
+          if [[ ! -f "${ZIP_NAME}.sigstore.json" ]]; then
+            echo "::error::Missing ${ZIP_NAME}.sigstore.json on release ${RELEASE_TAG}"
+            exit 1
+          fi
+          echo "Found ${ZIP_NAME}.sigstore.json ($(wc -c < "${ZIP_NAME}.sigstore.json") bytes)"
+
+      - name: Verify build provenance attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify "${ZIP_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${SIGNER_WORKFLOW}"
+          echo "Attestation verified via ${SIGNER_WORKFLOW}"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Fixture attestation verify"
+            echo ""
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Release | \`${RELEASE_TAG}\` |"
+            echo "| Asset | \`${ZIP_NAME}\` |"
+            echo "| SHA256SUMS | ✅ |"
+            echo "| Sigstore bundle asset | ✅ |"
+            echo "| gh attestation verify | ✅ |"
+            echo "| Signer workflow | \`${SIGNER_WORKFLOW}\` |"
+          } >> "${GITHUB_STEP_SUMMARY}"

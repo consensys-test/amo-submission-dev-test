@@ -1,0 +1,206 @@
+# L1 fixture twin of MetaMask runway-extension-release-and-submit.yml.
+# No CWS/AMO — Phase 2 is attestation verify only (no prod mutation).
+# Permission ceiling: calling jobs must grant what callees request (INFRA-3735).
+name: Runway fixture release and verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: 'Optional integrity check — must match the commit this workflow runs on'
+        required: false
+        type: string
+      execute_store_phases:
+        description: 'Run publish + verify after validation. Default true; false = Phase 0 only'
+        required: false
+        type: boolean
+        default: true
+      skip_publish:
+        description: 'Skip Phase 1 (also auto-skips when GitHub Release already exists at release_sha)'
+        required: false
+        type: boolean
+        default: false
+      skip_verify:
+        description: 'Skip Phase 2 attestation verify'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: runway-fixture-release-and-verify-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  validate:
+    name: Phase 0 — validate preconditions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.derive-version.outputs.version }}
+      release_sha: ${{ steps.resolve-sha.outputs.release_sha }}
+      release_exists: ${{ steps.detect-release.outputs.release_exists }}
+    steps:
+      - name: Validate branch ref
+        env:
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" =~ ^refs/heads/release/ ]]; then
+            echo "Branch: ${GITHUB_REF#refs/heads/}"
+          else
+            echo "::error::Orchestrator must run from refs/heads/release/* (current: ${GITHUB_REF})"
+            exit 1
+          fi
+
+      - name: Derive version from release branch
+        id: derive-version
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#release/}"
+          if [[ ! "${version}" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+            echo "::error::Could not derive version from branch ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "Derived version: ${version}"
+
+      - name: Resolve release SHA
+        id: resolve-sha
+        env:
+          INPUT_SHA: ${{ inputs.release_sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          RELEASE_SHA="${INPUT_SHA:-${WORKFLOW_SHA}}"
+          if [[ -n "${INPUT_SHA}" && "${INPUT_SHA}" != "${WORKFLOW_SHA}" ]]; then
+            echo "::error::release_sha ${INPUT_SHA} does not match workflow commit ${WORKFLOW_SHA}"
+            exit 1
+          fi
+          echo "release_sha=${RELEASE_SHA}" >> "${GITHUB_OUTPUT}"
+
+      - name: Detect existing GitHub Release
+        id: detect-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ steps.derive-version.outputs.version }}
+          RELEASE_SHA: ${{ steps.resolve-sha.outputs.release_sha }}
+          EXECUTE_STORE: ${{ inputs.execute_store_phases }}
+        run: |
+          set -euo pipefail
+          release_exists=false
+          if target="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json targetCommitish --jq .targetCommitish 2>/dev/null)"; then
+            if [[ "${target}" == "${RELEASE_SHA}" ]]; then
+              release_exists=true
+              echo "Release ${RELEASE_TAG} exists at ${RELEASE_SHA:0:7}"
+            else
+              echo "::error::Release ${RELEASE_TAG} exists at ${target:0:7} but expected ${RELEASE_SHA:0:7}"
+              if [[ "${EXECUTE_STORE}" == "true" ]]; then
+                exit 1
+              fi
+            fi
+          else
+            echo "No existing release ${RELEASE_TAG}"
+          fi
+          echo "release_exists=${release_exists}" >> "${GITHUB_OUTPUT}"
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.derive-version.outputs.version }}
+          RELEASE_SHA: ${{ steps.resolve-sha.outputs.release_sha }}
+          RELEASE_EXISTS: ${{ steps.detect-release.outputs.release_exists }}
+          EXECUTE_STORE: ${{ inputs.execute_store_phases }}
+        run: |
+          {
+            echo "### Phase 0 — validation passed"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Version | \`${VERSION}\` |"
+            echo "| Release SHA | \`${RELEASE_SHA}\` |"
+            echo "| Ref | \`${{ github.ref }}\` |"
+            echo "| execute_store_phases | \`${EXECUTE_STORE}\` |"
+            echo "| release_exists (auto-skip Phase 1) | \`${RELEASE_EXISTS}\` |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  publish-release:
+    name: Phase 1 — publish fixture release
+    needs:
+      - validate
+    if: >-
+      ${{
+        inputs.execute_store_phases &&
+        !inputs.skip_publish &&
+        needs.validate.outputs.release_exists != 'true'
+      }}
+    # Calling-job ceiling must cover the callee's attestations: write.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/publish-release-from-release-head.yml
+    secrets: inherit
+
+  verify-attestations:
+    name: Phase 2 — verify attestations
+    needs:
+      - validate
+      - publish-release
+    if: >-
+      ${{
+        always() &&
+        inputs.execute_store_phases &&
+        !inputs.skip_verify &&
+        needs.validate.result == 'success' &&
+        (needs.publish-release.result == 'success' || needs.publish-release.result == 'skipped')
+      }}
+    # Calling-job ceiling must cover the callee's attestations: read.
+    permissions:
+      contents: read
+      attestations: read
+    uses: ./.github/workflows/verify-release-attestations.yml
+    with:
+      version: ${{ needs.validate.outputs.version }}
+    secrets: inherit
+
+  orchestrator-summary:
+    name: Orchestrator summary
+    needs:
+      - validate
+      - publish-release
+      - verify-attestations
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write summary
+        env:
+          VALIDATE: ${{ needs.validate.result }}
+          PUBLISH: ${{ needs.publish-release.result }}
+          VERIFY: ${{ needs.verify-attestations.result }}
+          EXECUTE_STORE: ${{ inputs.execute_store_phases }}
+          SKIP_PUBLISH: ${{ inputs.skip_publish }}
+          SKIP_VERIFY: ${{ inputs.skip_verify }}
+          RELEASE_EXISTS: ${{ needs.validate.outputs.release_exists }}
+        run: |
+          {
+            echo "### Fixture orchestrator summary"
+            echo ""
+            echo "| Phase | Result |"
+            echo "| --- | --- |"
+            echo "| 0 validate | ${VALIDATE} |"
+            if [[ "${RELEASE_EXISTS}" == "true" && "${SKIP_PUBLISH}" != "true" ]]; then
+              echo "| 1 publish | ${PUBLISH} (auto-skipped: release exists) |"
+            else
+              echo "| 1 publish | ${PUBLISH} (skip_publish=${SKIP_PUBLISH}) |"
+            fi
+            echo "| 2 verify | ${VERIFY} (skip=${SKIP_VERIFY}) |"
+            echo ""
+            if [[ "${EXECUTE_STORE}" != "true" ]]; then
+              echo "Store phases were **not requested** (\`execute_store_phases=false\`)."
+              echo ""
+              echo "**Recovery:** re-dispatch from the same release branch with the same \`release_sha\` (completed phases auto-skip)."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
