@@ -30,3 +30,7 @@ aws iam delete-role-policy \
   --policy-name put-fixture-reviewer-source-artifacts
 aws iam delete-role --role-name amo-reviewer-publisher-fixture
 ```
+
+## Related
+
+Smoke evidence (S3 keys, AMO-dev attach, Lambda v18→v19): [smoke-results.md](./smoke-results.md).

@@ -109,11 +109,14 @@ fetch, MetaMask release notes API scrape.
 
 ### Proven run
 
+Full table (OIDC → S3 → Lambda attach + **v18 vs v19 diff**): [docs/smoke-results.md](docs/smoke-results.md).
+
 - Fixture orchestrator: [31218229073](https://github.com/consensys-test/amo-submission-dev-test/actions/runs/31218229073)
 - Release: [v1.0.12](https://github.com/consensys-test/amo-submission-dev-test/releases/tag/v1.0.12)
 - MetaMask AMO-dev download/attachment: [31218369579](https://github.com/MetaMask/metamask-extension/actions/runs/31218369579)
 
-UAT `dev` used Lambda version 19 with `AMO_REVIEWER_REQUIRED=true`. The first
-submission returned `attestation_verified=true`, `source_attached=true`,
-`approval_notes_attached=true`, and `release_notes_attached=true`.
+UAT `dev` → Lambda **v19**: same `CodeSha256` as v18; **only** added env
+`AMO_REVIEWER_REQUIRED=true` (plus version description). First submission:
+`attestation_verified=true`, `source_attached=true`,
+`approval_notes_attached=true`, `release_notes_attached=true`.
 
