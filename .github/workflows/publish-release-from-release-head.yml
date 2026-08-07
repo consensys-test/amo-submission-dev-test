@@ -1,10 +1,12 @@
 # Fixture twin of MetaMask/metamask-extension publish-release-from-release-head.yml
 # (INFRA-3786). Same relative workflow path + release/* ref so the UAT
 # amo-submission Lambda signer pin matches without Terraform overrides.
+# workflow_call: used by the L1 fixture orchestrator (INFRA-3735 harness).
 name: Publish fixture release with attestation
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: write
@@ -14,11 +16,13 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: Require release branch
+        id: branch
         run: |
           set -euo pipefail
           ref="${GITHUB_REF}"
@@ -26,16 +30,34 @@ jobs:
             echo "::error::Dispatch from a release/* branch (got ${ref}). The UAT Lambda pins ATTESTATION_SIGNER_REF_PATTERN=refs/heads/release/.+"
             exit 1
           fi
+          version="${GITHUB_REF_NAME#release/}"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
       - name: Build fixture zip
         id: build
+        env:
+          # ~20 MiB urandom pad for INFRA-3675 UAT timing (download + AMO poll).
+          # Not MetaMask IP; personal gecko ID only (bobby.grigorov@consensys.net).
+          FIXTURE_PAD_MIB: "20"
+          EXPECTED_VERSION: ${{ steps.branch.outputs.version }}
         run: |
           set -euo pipefail
           eval "$(./scripts/build-release-artifacts.sh)"
+          if [[ "${version}" != "${EXPECTED_VERSION}" ]]; then
+            echo "::error::manifest version ${version} != branch version ${EXPECTED_VERSION}"
+            exit 1
+          fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "zip_path=${xpi}" >> "${GITHUB_OUTPUT}"
           echo "zip_name=$(basename "${xpi}")" >> "${GITHUB_OUTPUT}"
           ls -lh "${xpi}"
+          # Fail closed if padding did not produce a multi-MiB artifact.
+          size_bytes="$(stat -c%s "${xpi}")"
+          min_bytes=$((15 * 1024 * 1024))
+          if (( size_bytes < min_bytes )); then
+            echo "::error::Expected >=15 MiB fixture (got ${size_bytes} bytes). Check FIXTURE_PAD_MIB."
+            exit 1
+          fi
 
       - name: Attest fixture zip
         id: attest
@@ -77,14 +99,18 @@ jobs:
         run: |
           set -euo pipefail
           tag="v${VERSION}"
-          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "::error::Release ${tag} already exists"
+          if existing_target="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json targetCommitish --jq .targetCommitish 2>/dev/null)"; then
+            if [[ "${existing_target}" == "${GITHUB_SHA}" ]]; then
+              echo "Release ${tag} already exists at ${GITHUB_SHA:0:7}. Skipping create."
+              exit 0
+            fi
+            echo "::error::Release ${tag} exists at ${existing_target:0:7} but expected ${GITHUB_SHA:0:7}"
             exit 1
           fi
           gh release create "${tag}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${tag}" \
-            --notes "INFRA-3786 fixture: attested zip + .sigstore.json for UAT amo-submission." \
+            --notes "INFRA-3675/3786 fixture: ~20 MiB attested zip for UAT amo-submission size/timing. Personal gecko listing only — not MetaMask production." \
             --target "${GITHUB_SHA}" \
             "${ZIP_PATH}" \
             "${GITHUB_WORKSPACE}/${ZIP_NAME}.sigstore.json" \
