@@ -107,6 +107,13 @@ flask + main variants, S3 upload via OIDC.
 `firefox-bundle-script` clone, `compare_builds.sh`, real per-version `bundle.sh`
 fetch, MetaMask release notes API scrape.
 
-Lambda download on `:dev` still needs `AMO_REVIEWER_REQUIRED=true` (submission PR #27
-+ alias config) after objects land in S3.
+### Proven run
+
+- Fixture orchestrator: [31218229073](https://github.com/consensys-test/amo-submission-dev-test/actions/runs/31218229073)
+- Release: [v1.0.12](https://github.com/consensys-test/amo-submission-dev-test/releases/tag/v1.0.12)
+- MetaMask AMO-dev download/attachment: [31218369579](https://github.com/MetaMask/metamask-extension/actions/runs/31218369579)
+
+UAT `dev` used Lambda version 19 with `AMO_REVIEWER_REQUIRED=true`. The first
+submission returned `attestation_verified=true`, `source_attached=true`,
+`approval_notes_attached=true`, and `release_notes_attached=true`.
 
